@@ -12,16 +12,21 @@ import warnings
 warnings.filterwarnings("ignore")
 
 if __name__ == "__main__":
-    fitlog.set_log_dir("logs/")
-    fitlog.add_hyper(args)
-    fitlog.add_hyper_in_file(__file__)
-    # Save training and model parameters.
-    if not os.path.exists(args.save_dir):
-        os.system("mkdir -p " + args.save_dir)
+    if args.fitlog:
+        if 'SNIPS' in args.data_dir:
+            fitlog.set_log_dir("mixsnips_logs/")
+        if 'ATIS' in args.data_dir:
+            fitlog.set_log_dir("mixatis_logs/")
+        fitlog.set_log_dir("logs/")
+        fitlog.add_hyper(args)
+        fitlog.add_hyper_in_file(__file__)
+        # Save training and model parameters.
+        if not os.path.exists(args.save_dir):
+            os.system("mkdir -p " + args.save_dir)
 
-    log_path = os.path.join(args.save_dir, "param.json")
-    with open(log_path, "w", encoding="utf8") as fw:
-        fw.write(json.dumps(args.__dict__, indent=True))
+        log_path = os.path.join(args.save_dir, "param.json")
+        with open(log_path, "w", encoding="utf8") as fw:
+            fw.write(json.dumps(args.__dict__, indent=True))
 
     # Fix the random seed of package random.
     random.seed(args.random_state)
