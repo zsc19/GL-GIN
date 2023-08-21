@@ -8,6 +8,8 @@ from utils.loader import DatasetManager
 from utils.process import Processor
 from utils.config import *
 import fitlog
+import warnings
+warnings.filterwarnings("ignore")
 
 if __name__ == "__main__":
     fitlog.set_log_dir("logs/")
