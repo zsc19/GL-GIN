@@ -157,7 +157,7 @@ def computeF1Score(ss, correct_slots, pred_slots, args):
         f1 = (2.0 * precision * recall) / (precision + recall)
     else:
         f1 = 0
-    out = os.popen('perl ./utils/conlleval.pl -d \"\\t\" < {}'.format(os.path.join(args.save_dir, ffile))).readlines()
-    f1 = float(out[1][out[1].find("FB1:") + 4:-1].replace(" ", "")) / 100
+    # out = os.popen('perl ./utils/conlleval.pl -d \"\\t\" < {}'.format(os.path.join(args.save_dir, ffile))).readlines()
+    # f1 = float(out[1][out[1].find("FB1:") + 4:-1].replace(" ", "")) / 100
 
     return f1, precision, recall
