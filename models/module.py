@@ -90,14 +90,14 @@ class GAT(nn.Module):
         return x + input
 
 
-class Encoder(nn.Module):
+class TaskSharedEncoder(nn.Module):
     def __init__(self, args):
         super().__init__()
 
         self.__args = args
 
         # Initialize an LSTM Encoder object.
-        self.__encoder = LSTMEncoder(
+        self.__encoder = BiLSTMEncoder(
             self.__args.word_embedding_dim,
             self.__args.encoder_hidden_dim,
             self.__args.dropout_rate
@@ -112,8 +112,8 @@ class Encoder(nn.Module):
         )
 
     def forward(self, word_tensor, seq_lens):
-        lstm_hiddens = self.__encoder(word_tensor, seq_lens)
         attention_hiddens = self.__attention(word_tensor, seq_lens)
+        lstm_hiddens = self.__encoder(word_tensor, seq_lens)
         hiddens = torch.cat([attention_hiddens, lstm_hiddens], dim=2)
         return hiddens
 
@@ -128,36 +128,50 @@ class ModelManager(nn.Module):
         self.__num_intent = num_intent
         self.__args = args
 
-        # Initialize an embedding object.
-        self.__embedding = nn.Embedding(
-            self.__num_word,
-            self.__args.word_embedding_dim
-        )
-        self.G_encoder = Encoder(args)
-        # Initialize an Decoder object for intent.
-        self.__intent_decoder = nn.Sequential(
-            nn.Linear(self.__args.encoder_hidden_dim + self.__args.attention_output_dim,
-                      self.__args.encoder_hidden_dim + self.__args.attention_output_dim),
-            nn.LeakyReLU(args.alpha),
-            nn.Linear(self.__args.encoder_hidden_dim + self.__args.attention_output_dim, self.__num_intent),
-        )
+        # word embedding
+        self.__embedding = nn.Embedding(self.__num_word, self.__args.word_embedding_dim)
+        # task-shared: self-attentive encoder
+        self.__text_encoder = TaskSharedEncoder(args)
 
-        self.__intent_embedding = nn.Parameter(
-            torch.FloatTensor(self.__num_intent, self.__args.intent_embedding_dim))  # 191, 32
-        nn.init.normal_(self.__intent_embedding.data)
-
-        self.__slot_lstm = LSTMEncoder(
-            self.__args.encoder_hidden_dim + self.__args.attention_output_dim + num_intent,
+        # task-specific encoder
+        self.__pre_slot_lstm = BiLSTMEncoder(
+            self.__args.encoder_hidden_dim + self.__args.attention_output_dim,
             self.__args.slot_decoder_hidden_dim,
             self.__args.dropout_rate
         )
         self.__intent_lstm = LSTMEncoder(
-            self.__args.encoder_hidden_dim + self.__args.attention_output_dim,
-            self.__args.encoder_hidden_dim + self.__args.attention_output_dim,
+            self.__args.encoder_hidden_dim + self.__args.attention_output_dim + self.__num_slot,
+            self.__args.encoder_hidden_dim + self.__args.attention_output_dim + self.__num_slot,
+            self.__args.dropout_rate
+        )
+        self.__slot_lstm = BiLSTMEncoder(
+            self.__args.encoder_hidden_dim + self.__args.attention_output_dim + num_intent,
+            self.__args.slot_decoder_hidden_dim,
             self.__args.dropout_rate
         )
 
-        self.__slot_decoder = LSTMDecoder(
+        # intent label embedding
+        self.__intent_embedding = nn.Parameter(torch.FloatTensor(self.__num_intent, self.__args.intent_embedding_dim))
+        nn.init.normal_(self.__intent_embedding.data)
+        # Decoder
+        # self.__slot_decoder = nn.Sequential(
+        #     nn.Linear(self.__args.encoder_hidden_dim + self.__args.attention_output_dim, self.__args.encoder_hidden_dim + self.__args.attention_output_dim),
+        #     nn.Dropout(self.__args.dropout_rate),
+        #     nn.LeakyReLU(args.alpha),
+        #     nn.Linear(self.__args.encoder_hidden_dim + self.__args.attention_output_dim, self.__num_slot)
+        # )
+        self.__pre_slot_decoder = PreSlotDecoder(
+            args,
+            self.__args.encoder_hidden_dim + self.__args.attention_output_dim,
+            self.__args.slot_decoder_hidden_dim,
+            self.__num_slot, self.__args.dropout_rate)
+        self.__intent_decoder = nn.Sequential(
+            nn.Linear(self.__args.encoder_hidden_dim + self.__args.attention_output_dim + self.__num_slot,
+                      self.__args.encoder_hidden_dim + self.__args.attention_output_dim + self.__num_slot),
+            nn.LeakyReLU(args.alpha),
+            nn.Linear(self.__args.encoder_hidden_dim + self.__args.attention_output_dim + self.__num_slot, self.__num_intent),
+        )
+        self.__slot_decoder = SlotDecoder(
             args,
             self.__args.encoder_hidden_dim + self.__args.attention_output_dim,
             self.__args.slot_decoder_hidden_dim,
@@ -223,8 +237,13 @@ class ModelManager(nn.Module):
 
     def forward(self, text, seq_lens, n_predicts=None):
         word_tensor = self.__embedding(text)
-        g_hiddens = self.G_encoder(word_tensor, seq_lens)
-        intent_lstm_out = self.__intent_lstm(g_hiddens, seq_lens)
+        g_hiddens = self.__text_encoder(word_tensor, seq_lens)
+        # pre-slot
+        pre_slot_lstm_out = self.__pre_slot_lstm(g_hiddens, seq_lens)
+        pre_slot_lstm_out, pre_pred_slot = self.__pre_slot_decoder(pre_slot_lstm_out, seq_lens)
+        # print(pre_slot_lstm_out.size(), pre_pred_slot.size())
+
+        intent_lstm_out = self.__intent_lstm(torch.cat([g_hiddens, pre_slot_lstm_out], dim=-1), seq_lens)
         intent_lstm_out = F.dropout(intent_lstm_out, p=self.__args.dropout_rate, training=self.training)
         pred_intent = self.__intent_decoder(intent_lstm_out)
         seq_lens_tensor = torch.tensor(seq_lens)
@@ -278,6 +297,53 @@ class LSTMEncoder(nn.Module):
 
         # Parameter recording.
         self.__embedding_dim = embedding_dim
+        self.__hidden_dim = hidden_dim
+        self.__dropout_rate = dropout_rate
+
+        # Network attributes.
+        self.__dropout_layer = nn.Dropout(self.__dropout_rate)
+        self.__lstm_layer = nn.LSTM(
+            input_size=self.__embedding_dim,
+            hidden_size=self.__hidden_dim,
+            batch_first=True,
+            bidirectional=False,
+            dropout=self.__dropout_rate,
+            num_layers=1
+        )
+
+    def forward(self, embedded_text, seq_lens):
+        """ Forward process for LSTM Encoder.
+
+        (batch_size, max_sent_len)
+        -> (batch_size, max_sent_len, word_dim)
+        -> (batch_size, max_sent_len, hidden_dim)
+
+        :param embedded_text: padded and embedded input text.
+        :param seq_lens: is the length of original input text.
+        :return: is encoded word hidden vectors.
+        """
+
+        # Padded_text should be instance of LongTensor.
+        dropout_text = self.__dropout_layer(embedded_text)
+
+        # Pack and Pad process for input of variable length.
+        packed_text = pack_padded_sequence(dropout_text, seq_lens, batch_first=True)
+        lstm_hiddens, (h_last, c_last) = self.__lstm_layer(packed_text)
+        padded_hiddens, _ = pad_packed_sequence(lstm_hiddens, batch_first=True)
+
+        return padded_hiddens
+
+
+class BiLSTMEncoder(nn.Module):
+    """
+    Encoder structure based on bidirectional LSTM.
+    """
+
+    def __init__(self, embedding_dim, hidden_dim, dropout_rate):
+        super(BiLSTMEncoder, self).__init__()
+
+        # Parameter recording.
+        self.__embedding_dim = embedding_dim
         self.__hidden_dim = hidden_dim // 2
         self.__dropout_rate = dropout_rate
 
@@ -315,7 +381,56 @@ class LSTMEncoder(nn.Module):
         return padded_hiddens
 
 
-class LSTMDecoder(nn.Module):
+class PreSlotDecoder(nn.Module):
+    """
+    Decoder structure based on unidirectional LSTM. 其实没有用LSTM解码
+    """
+
+    def __init__(self, args, input_dim, hidden_dim, output_dim, embedding_dim=None, extra_dim=None):
+        """ Construction function for Decoder.
+
+        :param input_dim: input dimension of Decoder. In fact, it's encoder hidden size.
+        :param hidden_dim: hidden dimension of iterative LSTM.
+        :param output_dim: output dimension of Decoder. In fact, it's total number of intent or slot.
+        :param dropout_rate: dropout rate of network which is only useful for embedding.
+        """
+
+        super(PreSlotDecoder, self).__init__()
+        self.__args = args
+        self.__input_dim = input_dim
+        self.__hidden_dim = hidden_dim
+        self.__output_dim = output_dim
+        # self.__dropout_rate = dropout_rate
+        self.__embedding_dim = embedding_dim
+        self.__extra_dim = extra_dim
+
+        self.__linear_layer = nn.Sequential(
+            nn.Linear(self.__hidden_dim,
+                      self.__hidden_dim),
+            nn.LeakyReLU(args.alpha),
+            nn.Linear(self.__hidden_dim, self.__output_dim),
+        )
+
+    def forward(self, encoded_hiddens, seq_lens, global_adj=None, slot_adj=None, intent_embedding=None):
+        """ Forward process for decoder.
+
+        :param encoded_hiddens: is encoded hidden tensors produced by encoder.
+        :param seq_lens: is a list containing lengths of sentence.
+        :return: is distribution of prediction labels.
+        """
+
+        output_tensor_list, sent_start_pos = [], 0
+
+        out = self.__linear_layer(encoded_hiddens)  # torch.Size([16, 53, 117])
+
+        for i in range(0, len(seq_lens)):
+            output_tensor_list.append(out[i, 0:0 + seq_lens[i]])  # num_intent:num_intent
+
+        a = torch.cat(output_tensor_list, dim=0)
+        return out, a
+
+
+class SlotDecoder(nn.Module):
     """
     Decoder structure based on unidirectional LSTM.
     """
@@ -329,7 +444,7 @@ class LSTMDecoder(nn.Module):
         :param dropout_rate: dropout rate of network which is only useful for embedding.
         """
 
-        super(LSTMDecoder, self).__init__()
+        super(SlotDecoder, self).__init__()
         self.__args = args
         self.__input_dim = input_dim
         self.__hidden_dim = hidden_dim
@@ -469,26 +584,3 @@ class SelfAttention(nn.Module):
         )
 
         return attention_x
-
-
-class UnflatSelfAttention(nn.Module):
-    """
-    scores each element of the sequence with a linear layer and uses the normalized scores to compute a context over the sequence.
-    """
-
-    def __init__(self, d_hid, dropout=0.):
-        super().__init__()
-        self.scorer = nn.Linear(d_hid, 1)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, inp, lens):
-        batch_size, seq_len, d_feat = inp.size()
-        inp = self.dropout(inp)
-        scores = self.scorer(inp.contiguous().view(-1, d_feat)).view(batch_size, seq_len)
-        max_len = max(lens)
-        for i, l in enumerate(lens):
-            if l < max_len:
-                scores.data[i, l:] = -np.inf
-        scores = F.softmax(scores, dim=1)
-        context = scores.unsqueeze(2).expand_as(inp).mul(inp).sum(1)
-        return context
