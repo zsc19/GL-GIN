@@ -134,7 +134,7 @@ class Processor(object):
                 self.__optimizer.step()
 
                 try:
-                    pre_slot_loss += pre_slot_loss_alpha * pre_slot_loss.cpu().item
+                    pre_slot_loss += pre_slot_loss_alpha * pre_slot_loss.cpu().item()
                     total_slot_loss += slot_loss_alpha * slot_loss.cpu().item()
                     total_intent_loss += intent_loss_alpha * intent_loss.cpu().item()
                 except AttributeError:
