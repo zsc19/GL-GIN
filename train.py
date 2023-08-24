@@ -17,7 +17,7 @@ if __name__ == "__main__":
             fitlog.set_log_dir("mixsnips_logs/")
         if 'ATIS' in args.data_dir:
             fitlog.set_log_dir("mixatis_logs/")
-        fitlog.set_log_dir("logs/")
+        # fitlog.set_log_dir("logs/")
         fitlog.add_hyper(args)
         fitlog.add_hyper_in_file(__file__)
         # Save training and model parameters.
