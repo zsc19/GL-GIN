@@ -19,7 +19,7 @@ In the following, we will guide you how to use this repository step by step.
 
 ## Architecture
 
-![framework](img/流程图 (29).jpg)
+![framework](img/123.jpg)
 
 ## Results
 
