@@ -93,7 +93,7 @@ class Processor(object):
         no_improve = 0
         dataloader = self.__dataset.batch_delivery('train')
         for epoch in range(0, self.__dataset.num_epoch):
-            total_slot_loss, total_intent_loss = 0.0, 0.0
+            total_slot_loss_0, total_slot_loss, total_intent_loss, total_intent_number_loss = 0.0, 0.0, 0.0, 0.0
             time_start = time.time()
             self.__model.train()
 
@@ -117,24 +117,28 @@ class Processor(object):
 
                 random_slot, random_intent = random.random(), random.random()
 
-                slot_out, intent_out = self.__model(text_var, seq_lens)
+                pre_slot_out, slot_out, intent_out = self.__model(text_var, seq_lens)
 
                 slot_var = torch.cat([slot_var[i][:seq_lens[i]] for i in range(0, len(seq_lens))], dim=0)
-                slot_loss = self.__criterion(slot_out, slot_var)
-
+                pre_slot_loss = self.__criterion(pre_slot_out, slot_var)
                 intent_out = torch.cat([intent_out[i][:seq_lens[i]] for i in range(0, len(seq_lens))], dim=0)
                 intent_loss = self.__criterion_intent(intent_out, intent_var)
+                slot_loss = self.__criterion(slot_out, slot_var)
+
                 intent_loss_alpha = self.args.intent_loss_alpha
                 slot_loss_alpha = self.args.slot_loss_alpha
-                batch_loss = slot_loss_alpha * slot_loss + intent_loss_alpha * intent_loss
+                pre_slot_loss_alpha = self.args.pre_slot_loss_alpha
+                batch_loss = pre_slot_loss_alpha * pre_slot_loss + slot_loss_alpha * slot_loss + intent_loss_alpha * intent_loss
                 self.__optimizer.zero_grad()
                 batch_loss.backward()
                 self.__optimizer.step()
 
                 try:
+                    pre_slot_loss += pre_slot_loss_alpha * pre_slot_loss.cpu().item
                     total_slot_loss += slot_loss_alpha * slot_loss.cpu().item()
                     total_intent_loss += intent_loss_alpha * intent_loss.cpu().item()
                 except AttributeError:
+                    pre_slot_loss += pre_slot_loss_alpha * pre_slot_loss.cpu().data.numpy()[0]
                     total_slot_loss += slot_loss_alpha * slot_loss.cpu().data.numpy()[0]
                     total_intent_loss += intent_loss_alpha * intent_loss.cpu().data.numpy()[0]
 
@@ -146,17 +150,18 @@ class Processor(object):
                     raise FileExistsError("gg")
                 try:
                     time.sleep(1)
-                    fitlog.add_loss(total_slot_loss, name='slot loss', step=epoch)
+                    fitlog.add_loss(pre_slot_loss, name='first slot loss', step=epoch)
+                    fitlog.add_loss(total_slot_loss, name='last slot loss', step=epoch)
                     fflag = False
                 except FileExistsError as e:
                     pass
 
             fitlog.add_loss(total_intent_loss, name='intent loss', step=epoch)
-            fitlog.add_loss(total_intent_loss + total_slot_loss, name='total loss', step=epoch)
+            fitlog.add_loss(pre_slot_loss + total_intent_loss + total_slot_loss, name='total loss', step=epoch)
             time_con = time.time() - time_start
             print(
-                '[Epoch {:2d}]: The total slot loss on train data is {:2.6f}, intent data is {:2.6f}, cost ' \
-                'about {:2.6} seconds.'.format(epoch, total_slot_loss, total_intent_loss, time_con))
+                '[Epoch {:2d}]: The  first slot loss on train data is {:2.6f}, last slot loss on train data is {:2.6f}, intent data is {:2.6f}, cost ' \
+                'about {:2.6} seconds.'.format(epoch, pre_slot_loss, total_slot_loss, total_intent_loss, time_con))
 
             change, time_start = False, time.time()
             dev_slot_f1_score, dev_intent_f1_score, dev_intent_acc_score, dev_sent_acc_score = self.estimate(
@@ -165,7 +170,7 @@ class Processor(object):
                 args=self.args)
             fitlog.add_metric(
                 {"dev": {"slot f1": dev_slot_f1_score,
-                         "intent f1": dev_intent_f1_score,
+                         # "intent f1": dev_intent_f1_score,
                          "intent acc": dev_intent_acc_score,
                          "exact acc": dev_sent_acc_score
                          }
@@ -181,9 +186,9 @@ class Processor(object):
                 test_slot_f1, test_intent_f1, test_intent_acc, test_sent_acc = self.estimate(
                     if_dev=False, test_batch=self.__batch_size, args=self.args)
 
-                print('\nTest result: epoch: {}, slot f1 score: {:.6f}, intent f1 score: {:.6f}, intent acc score:'
+                print('\nTest result: epoch: {}, slot f1 score: {:.6f}, intent acc score:'
                       ' {:.6f}, semantic accuracy score: {:.6f}.'.
-                      format(epoch, test_slot_f1, test_intent_f1, test_intent_acc, test_sent_acc))
+                      format(epoch, test_slot_f1, test_intent_acc, test_sent_acc))
 
                 model_save_dir = os.path.join(self.__dataset.save_dir, "model")
                 if not os.path.exists(model_save_dir):
@@ -194,7 +199,7 @@ class Processor(object):
 
                 fitlog.add_best_metric(
                     {"dev": {"slot f1": dev_slot_f1_score,
-                             "intent f1": dev_intent_f1_score,
+                             # "intent f1": dev_intent_f1_score,
                              "intent acc": dev_intent_acc_score,
                              "exact acc": dev_sent_acc_score
                              }
@@ -202,7 +207,7 @@ class Processor(object):
                 )
                 fitlog.add_metric(
                     {"test": {"slot f1": test_slot_f1,
-                              "intent f1": test_intent_f1,
+                              # "intent f1": test_intent_f1,
                               "intent acc": test_intent_acc,
                               "exact acc": test_sent_acc
                               }
@@ -210,8 +215,16 @@ class Processor(object):
                     step=epoch
                 )
                 fitlog.add_best_metric(
+                    {"dev": {"slot f1": dev_slot_f1_score,
+                             # "intent f1": dev_intent_f1_score,
+                             "intent acc": dev_intent_acc_score,
+                             "exact acc": dev_sent_acc_score
+                             }
+                     }
+                )
+                fitlog.add_best_metric(
                     {"test": {"slot f1": test_slot_f1,
-                              "intent f1": test_intent_f1,
+                              # "intent f1": test_intent_f1,
                               "intent acc": test_intent_acc,
                               "exact acc": test_sent_acc
                               }
@@ -222,8 +235,8 @@ class Processor(object):
 
                 time_con = time.time() - time_start
                 print('[Epoch {:2d}]: In validation process, the slot f1 score is {:2.6f}, ' \
-                      'the intent f1 score is {:2.6f}, the intent acc score is {:2.6f}, the semantic acc is {:.2f}, cost about {:2.6f} seconds.\n'.format(
-                    epoch, dev_slot_f1_score, dev_intent_f1_score, dev_intent_acc_score,
+                      'the intent acc score is {:2.6f}, the semantic acc is {:.2f}, cost about {:2.6f} seconds.\n'.format(
+                    epoch, dev_slot_f1_score, dev_intent_acc_score,
                     dev_sent_acc_score, time_con))
 
             else:
@@ -257,8 +270,9 @@ class Processor(object):
             average='macro')
         intent_acc_score = Evaluator.intent_acc(pred_intent, real_intent)
         sent_acc = Evaluator.semantic_acc(pred_slot, real_slot, pred_intent, real_intent)
-        print("slot f1: {}, intent f1: {}, intent acc: {}, exact acc: {}".format(slot_f1_score, intent_f1_score,
-                                                                                 intent_acc_score, sent_acc))
+        # print("slot f1: {}, intent f1: {}, intent acc: {}, exact acc: {}".format(slot_f1_score, intent_f1_score,
+        #                                                                          intent_acc_score, sent_acc))
+        print("slot f1: {}, intent acc: {}, exact acc: {}".format(slot_f1_score, intent_acc_score, sent_acc))
         # Write those sample both have intent and slot errors.
         with open(os.path.join(args.save_dir, 'error.txt'), 'w', encoding="utf8") as fw:
             for p_slot_list, r_slot_list, p_intent_list, r_intent in \
@@ -295,8 +309,7 @@ class Processor(object):
                                    average='macro')
         intent_acc_score = Evaluator.intent_acc(pred_intent, real_intent)
         sent_acc = Evaluator.semantic_acc(pred_slot, real_slot, pred_intent, real_intent)
-        print("slot f1: {}, intent f1: {}, intent acc: {}, exact acc: {}".format(slot_f1_score, intent_f1_score,
-                                                                                 intent_acc_score, sent_acc))
+        print("slot f1: {}, intent acc: {}, exact acc: {}".format(slot_f1_score, intent_acc_score, sent_acc))
         # Write those sample both have intent and slot errors.
 
         with open(os.path.join(args.save_dir, 'error.txt'), 'w', encoding="utf8") as fw:
@@ -341,7 +354,7 @@ class Processor(object):
             max_len = np.max(seq_lens)
             if args.gpu:
                 var_text = var_text.cuda()
-            slot_idx, intent_idx = model(var_text, seq_lens, n_predicts=1)
+            _, slot_idx, intent_idx = model(var_text, seq_lens, n_predicts=1)
             nested_slot = Evaluator.nested_list([list(Evaluator.expand_list(slot_idx))], seq_lens)[0]
             pred_slot.extend(dataset.slot_alphabet.get_instance(nested_slot))
             intent_idx_ = [[] for i in range(len(digit_text))]
