@@ -270,8 +270,9 @@ class ModelManager(nn.Module):
             intent_embedding=self.__intent_embedding
         )
         if n_predicts is None:
-            return F.log_softmax(pred_slot, dim=1), pred_intent
+            return F.log_softmax(pre_pred_slot, dim=1), F.log_softmax(pred_slot, dim=1), pred_intent
         else:
+            _, pre_slot_index = pre_pred_slot.topk(n_predicts, dim=1)
             _, slot_index = pred_slot.topk(n_predicts, dim=1)
 
             intent_index_sum = torch.cat(
@@ -284,7 +285,7 @@ class ModelManager(nn.Module):
             )
             intent_index = (intent_index_sum > (seq_lens_tensor // 2).unsqueeze(1)).nonzero()
 
-            return slot_index.cpu().data.numpy().tolist(), intent_index.cpu().data.numpy().tolist()
+            return pre_slot_index.cpu().data.numpy().tolist(), slot_index.cpu().data.numpy().tolist(), intent_index.cpu().data.numpy().tolist()
 
 
 class LSTMEncoder(nn.Module):
