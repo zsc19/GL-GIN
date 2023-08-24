@@ -93,7 +93,7 @@ class Processor(object):
         no_improve = 0
         dataloader = self.__dataset.batch_delivery('train')
         for epoch in range(0, self.__dataset.num_epoch):
-            total_slot_loss_0, total_slot_loss, total_intent_loss, total_intent_number_loss = 0.0, 0.0, 0.0, 0.0
+            total_pre_slot_loss, total_slot_loss, total_intent_loss, total_intent_number_loss = 0.0, 0.0, 0.0, 0.0
             time_start = time.time()
             self.__model.train()
 
@@ -134,11 +134,11 @@ class Processor(object):
                 self.__optimizer.step()
 
                 try:
-                    pre_slot_loss += pre_slot_loss_alpha * pre_slot_loss.cpu().item()
+                    total_pre_slot_loss += pre_slot_loss_alpha * pre_slot_loss.cpu().item()
                     total_slot_loss += slot_loss_alpha * slot_loss.cpu().item()
                     total_intent_loss += intent_loss_alpha * intent_loss.cpu().item()
                 except AttributeError:
-                    pre_slot_loss += pre_slot_loss_alpha * pre_slot_loss.cpu().data.numpy()[0]
+                    total_pre_slot_loss += pre_slot_loss_alpha * pre_slot_loss.cpu().data.numpy()[0]
                     total_slot_loss += slot_loss_alpha * slot_loss.cpu().data.numpy()[0]
                     total_intent_loss += intent_loss_alpha * intent_loss.cpu().data.numpy()[0]
 
@@ -150,18 +150,18 @@ class Processor(object):
                     raise FileExistsError("gg")
                 try:
                     time.sleep(1)
-                    fitlog.add_loss(pre_slot_loss, name='first slot loss', step=epoch)
+                    fitlog.add_loss(total_pre_slot_loss, name='first slot loss', step=epoch)
                     fitlog.add_loss(total_slot_loss, name='last slot loss', step=epoch)
                     fflag = False
                 except FileExistsError as e:
                     pass
 
             fitlog.add_loss(total_intent_loss, name='intent loss', step=epoch)
-            fitlog.add_loss(pre_slot_loss + total_intent_loss + total_slot_loss, name='total loss', step=epoch)
+            fitlog.add_loss(total_pre_slot_loss + total_intent_loss + total_slot_loss, name='total loss', step=epoch)
             time_con = time.time() - time_start
             print(
                 '[Epoch {:2d}]: The  first slot loss on train data is {:2.6f}, last slot loss on train data is {:2.6f}, intent data is {:2.6f}, cost ' \
-                'about {:2.6} seconds.'.format(epoch, pre_slot_loss, total_slot_loss, total_intent_loss, time_con))
+                'about {:2.6} seconds.'.format(epoch, total_pre_slot_loss, total_slot_loss, total_intent_loss, time_con))
 
             change, time_start = False, time.time()
             dev_slot_f1_score, dev_intent_f1_score, dev_intent_acc_score, dev_sent_acc_score = self.estimate(
