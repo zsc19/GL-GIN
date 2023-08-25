@@ -102,11 +102,8 @@ class Processor(object):
                 padded_text, [sorted_slot, sorted_intent, sorted_intent_number], seq_lens = self.__dataset.add_padding(
                     text_batch, [(slot_batch, True), (intent_batch, False), (intent_number_batch, False)])
 
-                sorted_intent_exp = []
-                for item, num in zip(sorted_intent, seq_lens):
-                    sorted_intent_exp.extend([item] * num)
                 sorted_intent = [multilabel2one_hot(intents, len(self.__dataset.intent_alphabet)) for intents in
-                                 sorted_intent_exp]
+                                 sorted_intent]
                 text_var = torch.LongTensor(padded_text)
                 slot_var = torch.LongTensor(sorted_slot)
                 intent_var = torch.Tensor(sorted_intent)
@@ -125,7 +122,7 @@ class Processor(object):
 
                 slot_var = torch.cat([slot_var[i][:seq_lens[i]] for i in range(0, len(seq_lens))], dim=0)
                 pre_slot_loss = self.__criterion(pre_slot_out, slot_var)
-                intent_out = torch.cat([intent_out[i][:seq_lens[i]] for i in range(0, len(seq_lens))], dim=0)
+                # intent_out = torch.cat([intent_out[i][:seq_lens[i]] for i in range(0, len(seq_lens))], dim=0)
                 intent_loss = self.__criterion_intent(intent_out, intent_var)
                 intent_number_var = intent_number_var - 1
                 intent_number_loss = self.__criterion_num(intent_number_out, intent_number_var)
