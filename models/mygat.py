@@ -418,6 +418,8 @@ class ModelManager(nn.Module):
             intent_index = (intent_index_sum > (seq_lens_tensor // 2).unsqueeze(1)).nonzero()
 
             return pre_slot_index.cpu().data.numpy().tolist(), slot_index.cpu().data.numpy().tolist(), intent_index.cpu().data.numpy().tolist()
+            # 或许应该在process里面改
+            # return slot_index.cpu().data.numpy().tolist(), pre_slot_index.cpu().data.numpy().tolist(), intent_index.cpu().data.numpy().tolist()
 
 
 class LSTMEncoder(nn.Module):
